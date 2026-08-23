@@ -94,6 +94,14 @@ def get_or_create_session(buyer: str) -> int:
     return sid
 
 
+def get_session_by_buyer(buyer: str) -> int | None:
+    """只查不建（会话历史接口用；查不到返回 None 而不是创建）"""
+    conn = get_conn()
+    row = conn.execute("SELECT id FROM sessions WHERE buyer=?", (buyer,)).fetchone()
+    conn.close()
+    return row["id"] if row else None
+
+
 def list_sessions() -> list[dict]:
     conn = get_conn()
     rows = conn.execute(

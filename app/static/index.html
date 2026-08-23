@@ -76,9 +76,18 @@ function sendRpc(type, payload) {
 // 收响应：按 type 分发
 function handleRpc(d) {
   if (d.type === 'session.list.result') renderSessions(d.payload.sessions);
-  else if (d.type === 'chat.reply.result') renderReply(d.payload);
+  else if (d.type === 'session.history.result') renderHistory(d.payload.messages);
+  else if (d.type === 'chat.reply.result') { renderReply(d.payload); loadSessions(); }   // reply 后刷新侧栏
   else if (d.type === 'action.confirm.result') handleConfirmResult(d.payload);
   else if (d.type === 'error') addSystem('❌ ' + (d.payload && d.payload.message));
+}
+
+// 渲染历史消息（切会话时加载，实现会话隔离）
+function renderHistory(messages) {
+  messages.forEach(m => {
+    if (m.role === 'user') addMessage('user', m.content);
+    else if (m.role === 'assistant') addMessage('assistant', m.content);
+  });
 }
 
 // ===== 会话列表 =====
@@ -101,13 +110,17 @@ function newSession() {
   if (!name) return;
   document.getElementById('buyer-name').value = '';
   currentBuyer = name;
+  document.getElementById('messages').innerHTML = '';   // 新会话：干净的聊天区
   // 新建会话 = 用该 buyer 发一条"你好"（服务端 get_or_create）
   sendRpc('chat.reply', {buyer: name, buyer_message: '你好'});
 }
 
 function selectSession(s) {
   currentBuyer = s.buyer;
-  loadSessions();   // 刷新高亮（简化版：会话历史拉取放 Phase 6/7）
+  // 会话隔离：清空消息区，加载该买家自己的历史
+  document.getElementById('messages').innerHTML = '';
+  sendRpc('session.history', {buyer: s.buyer});
+  loadSessions();   // 刷新高亮
 }
 
 // ===== 消息区 =====

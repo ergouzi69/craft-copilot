@@ -11,7 +11,7 @@
 import pytest
 
 from app.transport import handle_message
-from app.protocol import REQ_CHAT_REPLY, REQ_ACTION_CONFIRM, REQ_SESSION_LIST
+from app.protocol import REQ_CHAT_REPLY, REQ_ACTION_CONFIRM, REQ_SESSION_LIST, REQ_SESSION_HISTORY
 import app.store.db as db
 
 
@@ -25,6 +25,10 @@ def clean_db(tmp_path, monkeypatch):
 
 def fake_reply(buyer, buyer_message):
     return {"session_id": 1, "suggestion": "OK", "tool_results": [], "pending_actions": [], "calls": 1}
+
+
+def fake_agent(buyer_message, registry, history=None):
+    return {"suggestion": "OK", "tool_results": [], "pending_actions": [], "calls": 1}
 
 
 def fake_confirm(action_id, approve):
@@ -56,6 +60,24 @@ def test_session_list_routing():
     resps = handle_message(req)
     assert resps[0]["type"] == "session.list.result"
     assert isinstance(resps[0]["payload"]["sessions"], list)
+
+
+def test_session_history_routing():
+    """会话历史按 buyer 隔离：A 看不到 B 的消息"""
+    from app.services.sessions import reply
+    reply("隔离买家A", "A 的消息", agent=fake_agent)
+    reply("隔离买家B", "B 的消息", agent=fake_agent)
+
+    resps_a = handle_message({"type": REQ_SESSION_HISTORY, "req_id": "5", "payload": {"buyer": "隔离买家A"}})
+    contents = [m["content"] for m in resps_a[0]["payload"]["messages"]]
+    assert "A 的消息" in contents
+    assert "B 的消息" not in contents                     # 隔离验证
+
+
+def test_session_history_unknown_buyer():
+    resps = handle_message({"type": REQ_SESSION_HISTORY, "req_id": "6", "payload": {"buyer": "不存在的人"}})
+    assert resps[0]["type"] == "session.history.result"
+    assert resps[0]["payload"]["messages"] == []
 
 
 def test_missing_req_id_errors():

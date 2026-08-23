@@ -15,8 +15,8 @@ from typing import Callable
 
 from app.protocol import (
     parse_request, response, error_response,
-    REQ_CHAT_REPLY, REQ_ACTION_CONFIRM, REQ_SESSION_LIST,
-    RES_CHAT_RESULT, RES_ACTION_RESULT, RES_SESSION_LIST,
+    REQ_CHAT_REPLY, REQ_ACTION_CONFIRM, REQ_SESSION_LIST, REQ_SESSION_HISTORY,
+    RES_CHAT_RESULT, RES_ACTION_RESULT, RES_SESSION_LIST, RES_SESSION_HISTORY,
     RPCError,
 )
 import app.services.sessions as sessions
@@ -50,5 +50,14 @@ def handle_message(raw: dict, reply_fn: Callable = sessions.reply,
 
     if rtype == REQ_SESSION_LIST:
         return [response(RES_SESSION_LIST, req_id, {"sessions": db.list_sessions()})]
+
+    if rtype == REQ_SESSION_HISTORY:
+        buyer = payload.get("buyer", "")
+        if not buyer:
+            return [error_response(req_id, "payload 需要 buyer")]
+        sid = db.get_session_by_buyer(buyer)
+        if sid is None:
+            return [response(RES_SESSION_HISTORY, req_id, {"buyer": buyer, "messages": []})]
+        return [response(RES_SESSION_HISTORY, req_id, {"buyer": buyer, "messages": db.get_messages(sid)})]
 
     return [error_response(req_id, f"未知 type: {rtype}")]

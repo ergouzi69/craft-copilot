@@ -18,11 +18,13 @@
 REQ_CHAT_REPLY = "chat.reply"            # 买家消息 → Agent 回复
 REQ_ACTION_CONFIRM = "action.confirm"    # 客服确认/拒绝操作
 REQ_SESSION_LIST = "session.list"        # 会话列表
+REQ_SESSION_HISTORY = "session.history"  # 某买家会话的消息历史
 
 # ---- type 常量（响应/推送） ----
 RES_CHAT_RESULT = "chat.reply.result"
 RES_ACTION_RESULT = "action.confirm.result"
 RES_SESSION_LIST = "session.list.result"
+RES_SESSION_HISTORY = "session.history.result"
 RES_ERROR = "error"                      # 通用错误
 
 
