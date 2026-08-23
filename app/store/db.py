@@ -18,7 +18,8 @@ import sqlite3
 import time
 from pathlib import Path
 
-DB_PATH = Path(os.environ.get("DB_PATH", str(Path(__file__).resolve().parent.parent / "craft.db")))
+# db.py 位于 app/store/ 下，项目根 = 上三级（app/store → app → craft-copilot）
+DB_PATH = Path(os.environ.get("DB_PATH", str(Path(__file__).resolve().parent.parent.parent / "craft.db")))
 
 SCHEMA_VERSION = 1
 
