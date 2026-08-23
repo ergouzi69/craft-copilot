@@ -56,7 +56,7 @@
 
 <script>
 // 版本标记：强刷后看 Console 第一行——是这行就说明加载的是流式版 JS
-console.log('craft-copilot 前端 v6e（addEventListener 修复 — 防扩展覆盖 onmessage）');
+console.log('craft-copilot 前端 v6g（done 等打字机渲染完再收尾 — 修整段出现）');
 
 // ===== 状态 =====
 let ws = null;
@@ -96,18 +96,37 @@ let typingEl = null;        // 当前打字机气泡
 let typeQueue = '';         // 待渲染字符
 let typeTimer = null;
 let tickCount = 0;          // 诊断用
+let donePending = false;    // done 帧已到，等打字机渲染完队列
 
 function handleRpc(d) {
-  // 诊断：看到每个帧类型 + 载荷长度
-  console.log('[ws]', d.type, d.type === 'chat.delta' ? 'len=' + (d.payload.text || '').length : '');
   if (d.type === 'session.list.result') renderSessions(d.payload.sessions);
   else if (d.type === 'session.history.result') renderHistory(d.payload.messages);
   else if (d.type === 'chat.reply.result') { renderReply(d.payload); loadSessions(); }
   else if (d.type === 'chat.status') showStatus(d.payload.text);
   else if (d.type === 'chat.delta') typeDelta(d.payload.text);
-  else if (d.type === 'chat.done') { renderReply(d.payload); loadSessions(); }
+  else if (d.type === 'chat.done') { handleDone(d.payload); loadSessions(); }
   else if (d.type === 'action.confirm.result') handleConfirmResult(d.payload);
   else if (d.type === 'error') addSystem('❌ ' + (d.payload && d.payload.message));
+}
+
+// done 帧：不立即清队列（否则打字机被杀死→整段出现）。
+// 标记 donePending，等 typeNext 渲染完剩余字符后再收尾。
+function handleDone(payload) {
+  donePending = true;
+  renderPendingCards(payload);          // pending 卡片立即加（不依赖打字机）
+  if (!typingEl || typeQueue.length === 0) {
+    finishTyping();
+  }
+}
+
+// 打字机收尾：清状态 + 删 status 提示
+function finishTyping() {
+  typingEl = null;
+  typeQueue = '';
+  typeTimer = null;
+  donePending = false;
+  const status = document.querySelector('.msg.status');
+  if (status) status.remove();
 }
 
 // 状态提示（识别意图中/生成建议中）
@@ -150,8 +169,12 @@ function typeNext() {
   if (tickCount < 3) console.log('[type] tick#' + tickCount, 'queue=', typeQueue.length);
   else if (tickCount % 10 === 0) console.log('[type] tick#' + tickCount, 'queue=', typeQueue.length);
   tickCount++;
-  // 防护：done 帧已清空 typingEl / queue 空 → 停止
-  if (!typingEl || typeQueue.length === 0) { typeTimer = null; return; }
+  // 队列空：若 done 已到则收尾，否则等新 delta
+  if (!typingEl || typeQueue.length === 0) {
+    typeTimer = null;
+    if (donePending) finishTyping();
+    return;
+  }
   try {
     const body = typingEl.querySelector('.type-body');
     if (!body) { typeTimer = null; return; }
@@ -248,22 +271,15 @@ function send() {
   sendRpc('chat.reply', {buyer: currentBuyer, buyer_message: text, stream: true});
 }
 
-// ===== 渲染回复（含 pending 卡片） =====
+// ===== 渲染回复（同步模式用；流式模式由 handleDone + finishTyping 收尾） =====
 function renderReply(payload) {
-  const hadTyping = typingEl !== null;   // 流式模式：打字机气泡已含完整内容
-  // 兜底：如果打字机气泡的 body 是空（缓存/race 等极端情况），用 suggestion 填
-  if (hadTyping) {
-    const body = typingEl && typingEl.querySelector('.type-body');
-    if (body && !body.textContent && payload.suggestion) {
-      body.textContent = payload.suggestion;
-    }
-  }
-  typingEl = null; typeQueue = ''; typeTimer = null;
-  const status = document.querySelector('.msg.status');
-  if (status) status.remove();
-  if (!hadTyping && payload.suggestion) addMessage('assistant', payload.suggestion);
-  // pending 操作 → 卡片
-  payload.pending_actions.forEach(p => {
+  if (payload.suggestion) addMessage('assistant', payload.suggestion);
+  renderPendingCards(payload);
+}
+
+// pending 操作 → 卡片（流式 done 帧也立即加，不依赖打字机）
+function renderPendingCards(payload) {
+  (payload.pending_actions || []).forEach(p => {
     const card = document.createElement('div');
     card.className = 'action-card';
     const title = document.createElement('div');
