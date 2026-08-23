@@ -240,3 +240,47 @@ def session_stats(session_id: int) -> dict:
         "total_duration_ms": row["total_ms"] or 0,
         "avg_duration_ms": round(row["avg_ms"] or 0),
     }
+
+
+def global_stats() -> dict:
+    """全局统计 + 成本估算（好项目标准 5：可观测 + 量化收益）"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) AS calls, SUM(total_tokens) AS tokens, "
+        "SUM(duration_ms) AS total_ms, AVG(duration_ms) AS avg_ms "
+        "FROM usage",
+    ).fetchone()
+    sessions_n = conn.execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"]
+    conn.close()
+
+    total_tokens = row["tokens"] or 0
+    # 成本估算：DeepSeek 近似价（输入 ¥2/百万 token，输出 ¥8/百万）——标注为估算
+    est_cost = total_tokens / 1_000_000 * 4   # 粗略混合单价
+    return {
+        "calls": row["calls"] or 0,
+        "total_tokens": total_tokens,
+        "total_duration_ms": row["total_ms"] or 0,
+        "avg_duration_ms": round(row["avg_ms"] or 0),
+        "sessions": sessions_n,
+        "est_cost_cny": round(est_cost, 4),   # 估算成本（元）
+        "note": "成本为估算（混合单价 ¥4/百万 token）",
+    }
+
+
+def adoption_stats() -> dict:
+    """评测：建议采纳率（Human-in-the-loop 的效果指标）
+    采纳率 = 客服确认执行的操作数 / 全部待确认操作数（拒绝/待处理不计）
+    """
+    conn = get_conn()
+    total = conn.execute("SELECT COUNT(*) AS n FROM actions").fetchone()["n"]
+    approved = conn.execute("SELECT COUNT(*) AS n FROM actions WHERE status='approved'").fetchone()["n"]
+    rejected = conn.execute("SELECT COUNT(*) AS n FROM actions WHERE status='rejected'").fetchone()["n"]
+    conn.close()
+    rate = approved / total if total else 0
+    return {
+        "total_actions": total,
+        "approved": approved,
+        "rejected": rejected,
+        "pending": total - approved - rejected,
+        "adoption_rate": round(rate, 4),
+    }

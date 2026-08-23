@@ -35,6 +35,10 @@ def reply(buyer: str, buyer_message: str, agent: Callable = run_agent_turn) -> d
 
     result = agent(buyer_message, _registry, history=history, system=system)
 
+    # 埋点：每次 LLM 调用落 usage 表（可观测：token/耗时/模型）
+    for meta in result.get("usage", []):
+        db.add_usage(session_id, meta)
+
     # 记忆提取：从消息 + 实际工具调用提取关键事实（订单号/意图）
     extract_memory(buyer, buyer_message, result.get("tools_used"))
 
@@ -82,9 +86,11 @@ def reply_stream(buyer: str, buyer_message: str,
             result.update(ev)
             yield {"type": "status", "text": "✅ 完成"}
 
-    # 落库 + 记忆提取（流式结束后）
+    # 落库 + 记忆提取 + 埋点（流式结束后）
     db.add_message(session_id, "assistant", result["suggestion"])
     extract_memory(buyer, buyer_message, result.get("tools_used"))
+    for meta in result.get("usage", []):
+        db.add_usage(session_id, meta)
 
     # pending 落库 + 带 id 返回（把 done 帧补充完整）
     for p in result["pending_actions"]:

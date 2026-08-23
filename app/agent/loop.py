@@ -40,27 +40,30 @@ def _tool_loop(
     messages: list[dict],
     registry: ToolRegistry,
     llm: Callable,
-) -> tuple[list[dict], list[str], list[dict], list[str], int, str]:
+) -> tuple[list[dict], list[str], list[dict], list[str], int, str, list[dict]]:
     """工具调用阶段：循环到 LLM 不再调工具（Observe-Reason-Act 前半）。
-    返回 (messages, tool_results, pending_actions, tools_used, calls, suggestion_or_error)
+    返回 (messages, tool_results, pending_actions, tools_used, calls, suggestion_or_error, usage_metas)
     suggestion 非空 = 已收尾（无需再流式）；空 = 还需要生成建议。
+    usage_metas：每次 LLM 调用的 token/耗时（可观测埋点，供上层落库）
     """
     tool_results: list[str] = []
     pending_actions: list[dict] = []
     tools_used: list[str] = []
+    usage_metas: list[dict] = []
     calls = 0
 
     for _ in range(MAX_TURNS):
         try:
-            resp, _meta = llm(messages, tools=registry.schemas())
+            resp, meta = llm(messages, tools=registry.schemas())
         except LLMError as e:
-            return messages, tool_results, pending_actions, tools_used, calls, f"⚠️ LLM 调用失败: {e}"
+            return messages, tool_results, pending_actions, tools_used, calls, f"⚠️ LLM 调用失败: {e}", usage_metas
+        usage_metas.append(meta)          # 埋点：每次调用都记录
         calls += 1
         msg = resp["choices"][0]["message"]
 
         # 终止检查：没有 tool_calls = LLM 收尾，给最终建议
         if not msg.get("tool_calls"):
-            return messages, tool_results, pending_actions, tools_used, calls, (msg.get("content") or "").strip()
+            return messages, tool_results, pending_actions, tools_used, calls, (msg.get("content") or "").strip(), usage_metas
 
         for call in msg["tool_calls"]:
             name, args = _parse_tool_call(call)
@@ -81,7 +84,7 @@ def _tool_loop(
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": tool_text})
 
     # 超轮数兜底（正常不该到这）
-    return messages, tool_results, pending_actions, tools_used, calls, "⚠️ 处理轮数过多已停止，请尝试更具体的描述。"
+    return messages, tool_results, pending_actions, tools_used, calls, "⚠️ 处理轮数过多已停止，请尝试更具体的描述。", usage_metas
 
 
 def run_agent_turn(
@@ -108,7 +111,7 @@ def run_agent_turn(
         messages.extend(history)
     messages.append({"role": "user", "content": buyer_message})
 
-    messages, tool_results, pending_actions, tools_used, calls, suggestion = _tool_loop(
+    messages, tool_results, pending_actions, tools_used, calls, suggestion, usage_metas = _tool_loop(
         messages, registry, llm)
 
     return {
@@ -117,6 +120,7 @@ def run_agent_turn(
         "pending_actions": pending_actions,
         "tools_used": tools_used,
         "calls": calls,
+        "usage": usage_metas,          # 埋点：本次轮次所有 LLM 调用
     }
 
 
@@ -139,13 +143,14 @@ def run_agent_turn_stream(
         messages.extend(history)
     messages.append({"role": "user", "content": buyer_message})
 
-    messages, tool_results, pending_actions, tools_used, calls, suggestion = _tool_loop(
+    messages, tool_results, pending_actions, tools_used, calls, suggestion, usage_metas = _tool_loop(
         messages, registry, llm)
 
     # LLM 失败或超轮数：已经给建议（带警告），不流式
     if suggestion.startswith("⚠️"):
         yield {"type": "done", "suggestion": suggestion, "tool_results": tool_results,
-               "pending_actions": pending_actions, "tools_used": tools_used, "calls": calls}
+               "pending_actions": pending_actions, "tools_used": tools_used, "calls": calls,
+               "usage": usage_metas}
         return
 
     # 建议阶段：无论工具阶段是否已收尾，都用流式重新生成建议
@@ -159,5 +164,7 @@ def run_agent_turn_stream(
     except LLMError as e:
         full = f"⚠️ 流式生成失败: {e}"
 
+    # 流式调用本身也算一次 LLM 调用（埋点：token 未知，至少记录时长——stream 的 usage 在响应末帧）
     yield {"type": "done", "suggestion": full, "tool_results": tool_results,
-           "pending_actions": pending_actions, "tools_used": tools_used, "calls": calls}
+           "pending_actions": pending_actions, "tools_used": tools_used, "calls": calls,
+           "usage": usage_metas}

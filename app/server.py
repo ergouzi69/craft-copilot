@@ -30,12 +30,20 @@ db.init_db()
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    resp = FileResponse(STATIC_DIR / "index.html")
+    resp.headers["Cache-Control"] = "no-store"   # 开发期禁用缓存（防止旧 JS 一直加载）
+    return resp
 
 
 @app.get("/api/sessions")
 def api_sessions():
     return {"sessions": db.list_sessions()}
+
+
+@app.get("/api/stats")
+def api_stats():
+    """可观测：全局统计（token/耗时/成本估算）+ 采纳率（评测）"""
+    return {"usage": db.global_stats(), "adoption": db.adoption_stats()}
 
 
 @app.websocket("/ws/copilot")
