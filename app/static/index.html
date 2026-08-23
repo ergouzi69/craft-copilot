@@ -56,7 +56,7 @@
 
 <script>
 // 版本标记：强刷后看 Console 第一行——是这行就说明加载的是流式版 JS
-console.log('craft-copilot 前端 v6c（流式打字机版 — 拆字渲染+null 防护）');
+console.log('craft-copilot 前端 v6d（流式诊断版）');
 
 // ===== 状态 =====
 let ws = null;
@@ -93,8 +93,11 @@ function sendRpc(type, payload) {
 let typingEl = null;        // 当前打字机气泡
 let typeQueue = '';         // 待渲染字符
 let typeTimer = null;
+let tickCount = 0;          // 诊断用
 
 function handleRpc(d) {
+  // 诊断：看到每个帧类型 + 载荷长度
+  console.log('[ws]', d.type, d.type === 'chat.delta' ? 'len=' + (d.payload.text || '').length : '');
   if (d.type === 'session.list.result') renderSessions(d.payload.sessions);
   else if (d.type === 'session.history.result') renderHistory(d.payload.messages);
   else if (d.type === 'chat.reply.result') { renderReply(d.payload); loadSessions(); }
@@ -141,6 +144,8 @@ function typeDelta(text) {
 }
 
 function typeNext() {
+  // 诊断：看到 tick + 剩余队列长度（每 10 tick 打一次，不刷屏）
+  if (++tickCount % 10 === 0) console.log('[type] tick', typeQueue.length, '剩余');
   // 防护：done 帧已清空 typingEl / queue 空 → 停止
   if (!typingEl || typeQueue.length === 0) { typeTimer = null; return; }
   try {
