@@ -27,8 +27,8 @@ def fake_reply(buyer, buyer_message):
     return {"session_id": 1, "suggestion": "OK", "tool_results": [], "pending_actions": [], "calls": 1}
 
 
-def fake_agent(buyer_message, registry, history=None):
-    return {"suggestion": "OK", "tool_results": [], "pending_actions": [], "calls": 1}
+def fake_agent(buyer_message, registry, history=None, system=None):
+    return {"suggestion": "OK", "tool_results": [], "pending_actions": [], "tools_used": [], "calls": 1}
 
 
 def fake_confirm(action_id, approve):

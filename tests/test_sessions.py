@@ -18,11 +18,12 @@ from app.agent.loop import run_agent_turn
 
 # 假 agent：固定返回（可注入特定结果）
 def make_fake_agent(suggestion="好的，已为您查询。", pending=None):
-    def fake(buyer_message, registry, history=None):
+    def fake(buyer_message, registry, history=None, system=None):
         return {
             "suggestion": suggestion,
             "tool_results": ["[淘宝] 订单 T1001 已发货"],
             "pending_actions": pending or [],
+            "tools_used": [],
             "calls": 2,
         }
     return fake

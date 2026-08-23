@@ -21,7 +21,7 @@ from pathlib import Path
 # db.py 位于 app/store/ 下，项目根 = 上三级（app/store → app → craft-copilot）
 DB_PATH = Path(os.environ.get("DB_PATH", str(Path(__file__).resolve().parent.parent.parent / "craft.db")))
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: dict[int, str] = {
     1: """
@@ -54,6 +54,17 @@ MIGRATIONS: dict[int, str] = {
         total_tokens INTEGER NOT NULL,
         duration_ms INTEGER NOT NULL,
         ts REAL NOT NULL
+    );
+    """,
+    # v2：买家记忆表（上下文工程的"用户记忆"类——买家画像/偏好/关键事实）
+    2: """
+    CREATE TABLE IF NOT EXISTS memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        buyer TEXT NOT NULL,
+        key TEXT NOT NULL,            -- 如 last_order / intent / vip
+        value TEXT NOT NULL,
+        updated_at REAL NOT NULL,
+        UNIQUE(buyer, key)
     );
     """,
 }
@@ -175,6 +186,27 @@ def get_actions(session_id: int) -> list[dict]:
     conn.close()
     return [{"id": r["id"], "tool": r["tool"], "args": json.loads(r["args"]),
              "status": r["status"], "ts": r["ts"]} for r in rows]
+
+
+# ========== memory（买家记忆：画像/偏好/关键事实，注入系统提示词） ==========
+
+def upsert_memory(buyer: str, key: str, value: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO memory (buyer, key, value, updated_at) VALUES (?,?,?,?) "
+        "ON CONFLICT(buyer, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (buyer, key, value, time.time()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_memory(buyer: str) -> dict[str, str]:
+    """返回该买家的全部记忆（key→value），用于注入系统提示词"""
+    conn = get_conn()
+    rows = conn.execute("SELECT key, value FROM memory WHERE buyer=?", (buyer,)).fetchall()
+    conn.close()
+    return {r["key"]: r["value"] for r in rows}
 
 
 # ========== usage（可观测埋点） ==========

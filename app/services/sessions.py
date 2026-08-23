@@ -14,28 +14,32 @@ from typing import Callable
 import app.store.db as db
 from app.tools.builtin import build_registry
 from app.agent.loop import run_agent_turn
+from app.agent.context import build_system, extract_memory
 
 _registry = build_registry()
 
 
 def reply(buyer: str, buyer_message: str, agent: Callable = run_agent_turn) -> dict:
-    """完整一轮：落库 + Agent + 落库。返回给上层（HTTP/WS）的结果"""
+    """完整一轮：落库 + Agent + 落库 + 记忆提取。返回给上层（HTTP/WS）的结果"""
     session_id = db.get_or_create_session(buyer)
     db.add_message(session_id, "user", buyer_message)
 
-    # 历史消息 → 上下文（多轮会话，Phase 6 会升级成五类上下文）
+    # 历史消息 → 会话上下文（多轮；最近 20 条，长会话压缩在 Phase 6c）
     history = [
         {"role": m["role"], "content": m["content"]}
         for m in db.get_messages(session_id, limit=20)[:-1]   # 排除刚插入的这条
     ]
 
-    result = agent(buyer_message, _registry, history=history)
+    # 五类上下文组装：全局知识 + 用户记忆（Prompt Sections）
+    system = build_system(db.get_memory(buyer))
 
-    # 落库：建议 + 埋点
+    result = agent(buyer_message, _registry, history=history, system=system)
+
+    # 记忆提取：从消息 + 实际工具调用提取关键事实（订单号/意图）
+    extract_memory(buyer, buyer_message, result.get("tools_used"))
+
+    # 落库：建议
     db.add_message(session_id, "assistant", result["suggestion"])
-    if result["calls"]:
-        # 埋点简化：calls 次数已记录在 usage 的调用细节中（由循环层逐次埋点更细，Phase 7 强化）
-        pass
 
     # risky 操作落 pending（循环层只返回提议，这里落库 + 带 id 返回）
     pending_with_id = []

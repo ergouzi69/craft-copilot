@@ -11,7 +11,8 @@
 4. 工具结果强制回填：LLM 必须看到工具真实结果再继续（不能自己编）
 5. 错误兜底：LLM 调用失败 → 返回可读错误（不静默）
 
-本层不落库、不感知 HTTP——纯净的 Agent 逻辑，可单测（注入 mock LLM）。
+上下文组装（Prompt Sections）在 agent/context.py——本层只负责循环，
+system 默认用 build_system({})（无记忆时），有记忆由服务层注入。
 """
 
 import json
@@ -19,19 +20,9 @@ from typing import Callable
 
 from app.tools.registry import ToolRegistry
 from app.llm import call_chat, LLMError
+from app.agent.context import build_system
 
 MAX_TURNS = 8   # 最多 8 轮（防死循环；真实场景 2-4 轮足够）
-
-# SYSTEM prompt：Agent 的"人设 + 规则"（Phase 6 会升级为 Prompt Sections）
-SYSTEM = """你是电商客服 Copilot，帮助客服人员高效处理买家消息。
-规则：
-1. 查订单/物流 → 调 query_order；退款 → 调 refund_order；不知道平台 → 调 list_sources
-2. 工具结果必须如实采用，不要编造订单信息
-3. 退款是高危操作：买家明确要求退款时，无论订单状态如何，【必须】调用 refund_order 提交申请，
-   由客服最终确认执行——不要用文字回复代替调工具
-4. 收到工具结果后，基于结果给客服一段可直接使用的回复建议
-5. 如果工具查不到信息，诚实说明，不要编造
-"""
 
 
 def _parse_tool_call(call: dict) -> tuple[str, dict]:
@@ -49,7 +40,7 @@ def run_agent_turn(
     buyer_message: str,
     registry: ToolRegistry,
     llm: Callable = call_chat,
-    system: str = SYSTEM,
+    system: str | None = None,
     history: list[dict] | None = None,
 ) -> dict:
     """执行一个完整的 Agent 轮次，返回:
@@ -57,9 +48,13 @@ def run_agent_turn(
       "suggestion": str,           # 最终建议（LLM 纯文本收尾）
       "tool_results": list[str],   # 已执行工具的结果
       "pending_actions": list[dict], # 待确认的高危操作（risky 拦截）
+      "tools_used": list[str],     # 实际调用的工具名（记忆提取用）
       "calls": int,                # LLM 调用次数（可观测）
     }
     """
+    if system is None:
+        system = build_system({})    # 默认无记忆版（服务层注入有记忆版）
+
     messages: list[dict] = [{"role": "system", "content": system}]
     if history:                      # 会话上下文（多轮）
         messages.extend(history)
@@ -67,6 +62,7 @@ def run_agent_turn(
 
     tool_results: list[str] = []
     pending_actions: list[dict] = []
+    tools_used: list[str] = []
     suggestion = ""
     calls = 0
 
@@ -78,6 +74,7 @@ def run_agent_turn(
                 "suggestion": f"⚠️ LLM 调用失败: {e}",
                 "tool_results": tool_results,
                 "pending_actions": pending_actions,
+                "tools_used": tools_used,
                 "calls": calls,
             }
         calls += 1
@@ -91,6 +88,7 @@ def run_agent_turn(
         for call in msg["tool_calls"]:
             name, args = _parse_tool_call(call)
             tool = registry.get(name)
+            tools_used.append(name)
             if not tool:
                 tool_text = f"工具不存在: {name}"
             elif tool.risky:
@@ -121,5 +119,6 @@ def run_agent_turn(
         "suggestion": suggestion,
         "tool_results": tool_results,
         "pending_actions": pending_actions,
+        "tools_used": tools_used,
         "calls": calls,
     }
