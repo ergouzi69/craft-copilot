@@ -8,10 +8,13 @@
 - 把服务层结果包装成响应信封
 - 未知 type / 协议错误 → error 响应（不静默）
 
+流式：chat.reply 带 payload.stream=true → 走 reply_stream，返回多条帧（status/delta/done）。
+handle_message 返回迭代器（可能是生成器），ws 端点 for 循环逐帧发送。
+
 本层不写业务逻辑——只有"路由 + 包装"（对齐 craft 的 handlers 层）
 """
 
-from typing import Callable
+from typing import Callable, Iterable
 
 from app.protocol import (
     parse_request, response, error_response,
@@ -24,8 +27,9 @@ import app.store.db as db
 
 
 def handle_message(raw: dict, reply_fn: Callable = sessions.reply,
-                   confirm_fn: Callable = sessions.confirm) -> list[dict]:
-    """处理一条请求消息，返回 0..N 条响应（当前同步版：恰好 1 条）。
+                   confirm_fn: Callable = sessions.confirm,
+                   reply_stream_fn: Callable = sessions.reply_stream) -> Iterable[dict]:
+    """处理一条请求消息，返回 0..N 条响应（迭代器；流式请求返回生成器）。
     reply_fn/confirm_fn 可注入（测试用 mock）。"""
     try:
         rtype, req_id, payload = parse_request(raw)
@@ -37,6 +41,9 @@ def handle_message(raw: dict, reply_fn: Callable = sessions.reply,
         message = payload.get("buyer_message", "")
         if not buyer or not message:
             return [error_response(req_id, "payload 需要 buyer 和 buyer_message")]
+        if payload.get("stream"):
+            # 流式：生成器逐帧发（status/delta/done）
+            return _stream_frames(reply_stream_fn, buyer, message, req_id)
         result = reply_fn(buyer, message)
         return [response(RES_CHAT_RESULT, req_id, result)]
 
@@ -61,3 +68,19 @@ def handle_message(raw: dict, reply_fn: Callable = sessions.reply,
         return [response(RES_SESSION_HISTORY, req_id, {"buyer": buyer, "messages": db.get_messages(sid)})]
 
     return [error_response(req_id, f"未知 type: {rtype}")]
+
+
+def _stream_frames(reply_stream_fn, buyer: str, message: str, req_id: str):
+    """把 reply_stream 的事件帧包装成 RPC 响应（req_id 带回去，客户端能对应）"""
+    for ev in reply_stream_fn(buyer, message):
+        if ev["type"] == "status":
+            yield response("chat.status", req_id, {"text": ev["text"]})
+        elif ev["type"] == "delta":
+            yield response("chat.delta", req_id, {"text": ev["text"]})
+        elif ev["type"] == "done":
+            yield response("chat.done", req_id, {
+                "suggestion": ev.get("suggestion", ""),
+                "tool_results": ev.get("tool_results", []),
+                "pending_actions": ev.get("pending_actions", []),
+                "session_id": ev.get("session_id"),
+            })

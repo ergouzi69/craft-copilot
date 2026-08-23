@@ -112,3 +112,22 @@ def test_ws_endpoint_roundtrip():
         d = ws.receive_json()
         assert d["type"] == "chat.reply.result"
         assert d["req_id"] == "7"
+
+
+# ===== 流式传输测试（chat.reply + stream:true → status/delta/done 帧） =====
+def fake_reply_stream(buyer, buyer_message):
+    yield {"type": "status", "text": "识别中"}
+    yield {"type": "delta", "text": "你"}
+    yield {"type": "delta", "text": "好"}
+    yield {"type": "done", "suggestion": "你好", "tool_results": [], "pending_actions": [], "calls": 2}
+
+
+def test_stream_routing():
+    req = {"type": REQ_CHAT_REPLY, "req_id": "8",
+           "payload": {"buyer": "张三", "buyer_message": "hi", "stream": True}}
+    resps = list(handle_message(req, reply_stream_fn=fake_reply_stream))
+    types = [r["type"] for r in resps]
+    assert types == ["chat.status", "chat.delta", "chat.delta", "chat.done"]
+    for r in resps:
+        assert r["req_id"] == "8"      # 所有帧 req_id 一致（客户端对应）
+    assert resps[-1]["payload"]["suggestion"] == "你好"

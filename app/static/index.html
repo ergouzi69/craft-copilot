@@ -74,12 +74,60 @@ function sendRpc(type, payload) {
 }
 
 // 收响应：按 type 分发
+let typingEl = null;        // 当前打字机气泡
+let typeQueue = '';         // 待渲染字符
+let typeTimer = null;
+
 function handleRpc(d) {
   if (d.type === 'session.list.result') renderSessions(d.payload.sessions);
   else if (d.type === 'session.history.result') renderHistory(d.payload.messages);
-  else if (d.type === 'chat.reply.result') { renderReply(d.payload); loadSessions(); }   // reply 后刷新侧栏
+  else if (d.type === 'chat.reply.result') { renderReply(d.payload); loadSessions(); }
+  else if (d.type === 'chat.status') showStatus(d.payload.text);
+  else if (d.type === 'chat.delta') typeDelta(d.payload.text);
+  else if (d.type === 'chat.done') { renderReply(d.payload); loadSessions(); }
   else if (d.type === 'action.confirm.result') handleConfirmResult(d.payload);
   else if (d.type === 'error') addSystem('❌ ' + (d.payload && d.payload.message));
+}
+
+// 状态提示（识别意图中/生成建议中）
+function showStatus(text) {
+  const last = document.querySelector('.msg.status');
+  if (!last) {
+    const el = document.createElement('div');
+    el.className = 'msg status typing';
+    el.textContent = text;
+    document.getElementById('messages').appendChild(el);
+  } else {
+    last.textContent = text;
+  }
+  scrollBottom();
+}
+
+// 打字机：delta 入队，40ms/字渲染（createElement 气泡，绝不 innerHTML+=）
+function typeDelta(text) {
+  if (!typingEl) {
+    typingEl = document.createElement('div');
+    typingEl.className = 'msg assistant';
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = '🤖 Copilot';
+    typingEl.appendChild(tag);
+    const body = document.createElement('div');
+    body.className = 'type-body';
+    typingEl.appendChild(body);
+    document.getElementById('messages').appendChild(typingEl);
+  }
+  typeQueue += text;
+  if (!typeTimer) typeTimer = setTimeout(typeNext, 40);
+}
+
+function typeNext() {
+  if (typeQueue.length === 0) { typeTimer = null; return; }
+  const body = typingEl.querySelector('.type-body');
+  body.textContent += typeQueue[0];
+  typeQueue = typeQueue.slice(1);
+  scrollBottom();
+  typeTimer = setTimeout(typeNext, 40);
 }
 
 // 渲染历史消息（切会话时加载，实现会话隔离）
@@ -153,23 +201,26 @@ function scrollBottom() {
   m.scrollTop = m.scrollHeight;
 }
 
-// ===== 发送买家消息 =====
+// ===== 发送买家消息（流式：打字机） =====
 function send() {
   const text = document.getElementById('msg').value.trim();
   if (!text) return;
   if (!currentBuyer) { alert('先选择买家（点左侧会话或新建）'); return; }
   document.getElementById('msg').value = '';
   addMessage('user', text);
-  addSystem('🔍 识别意图中...');
-  sendRpc('chat.reply', {buyer: currentBuyer, buyer_message: text});
+  showStatus('🔍 识别意图中...');
+  sendRpc('chat.reply', {buyer: currentBuyer, buyer_message: text, stream: true});
 }
 
 // ===== 渲染回复（含 pending 卡片） =====
 function renderReply(payload) {
-  // 去掉"识别意图中"
+  const hadTyping = typingEl !== null;   // 流式模式：打字机气泡已含完整内容
+  typingEl = null; typeQueue = ''; typeTimer = null;
+  const status = document.querySelector('.msg.status');
+  if (status) status.remove();
   const last = document.querySelector('.typing');
   if (last) last.remove();
-  addMessage('assistant', payload.suggestion);
+  if (!hadTyping && payload.suggestion) addMessage('assistant', payload.suggestion);
   // pending 操作 → 卡片
   payload.pending_actions.forEach(p => {
     const card = document.createElement('div');

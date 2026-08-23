@@ -45,7 +45,7 @@ async def ws_copilot(ws: WebSocket):
     try:
         while True:
             raw = await ws.receive_json()
-            for resp in handle_message(raw):
+            for resp in handle_message(raw):   # 迭代器：流式请求逐帧发送
                 await ws.send_json(resp)
     except WebSocketDisconnect:
         pass

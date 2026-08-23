@@ -12,7 +12,7 @@
 import pytest
 
 from app.tools.builtin import build_registry
-from app.agent.loop import run_agent_turn, MAX_TURNS
+from app.agent.loop import run_agent_turn, run_agent_turn_stream, MAX_TURNS
 from app.llm import LLMError
 
 
@@ -97,3 +97,50 @@ def test_llm_error_returns_readable():
     r = run_agent_turn("测试", build_registry(), llm=failing)
     assert "429" in r["suggestion"]
     assert r["calls"] == 0
+
+
+# ===== 流式（打字机）测试 =====
+def fake_stream(chunks):
+    def gen(messages):
+        for c in chunks:
+            yield c
+    return gen
+
+
+def test_stream_plain_text():
+    """无工具调用：纯流式输出（delta 逐块 + done 完整）"""
+    llm = make_llm([{"text": ""}])       # 工具阶段直接收尾但给空文本 → 走流式
+    stream = fake_stream(["你", "好", "世界"])
+    r = run_agent_turn_stream("你好", build_registry(), llm=llm, stream_fn=stream)
+    events = list(r)
+    types = [e["type"] for e in events]
+    assert "delta" in types and "done" in types
+    full = "".join(e["text"] for e in events if e["type"] == "delta")
+    assert full == "你好世界"
+    assert events[-1]["type"] == "done" and events[-1]["suggestion"] == "你好世界"
+
+
+def test_stream_with_tool_then_suggest():
+    """工具调用后流式建议：先 query 再流式生成"""
+    llm = make_llm([
+        {"tool_calls": [tc("query_order", {"order_id": "T1001"})]},
+        {"text": ""},                    # 工具阶段结束，空文本 → 流式
+    ])
+    stream = fake_stream(["已", "发货"])
+    r = run_agent_turn_stream("T1001 到哪了", build_registry(), llm=llm, stream_fn=stream)
+    events = list(r)
+    assert events[-1]["tool_results"][0].startswith("[淘宝]")
+    assert events[-1]["suggestion"] == "已发货"
+
+
+def test_stream_error_fallback():
+    """流式失败：返回带警告的 done（不崩溃）"""
+    llm = make_llm([{"text": ""}])
+
+    def failing(messages):
+        raise LLMError("流式超时")
+
+    r = run_agent_turn_stream("测试", build_registry(), llm=llm, stream_fn=failing)
+    events = list(r)
+    assert events[-1]["type"] == "done"
+    assert "流式生成失败" in events[-1]["suggestion"]

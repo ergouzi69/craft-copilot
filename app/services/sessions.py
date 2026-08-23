@@ -9,11 +9,11 @@
 - 状态机：pending → approved（真执行）/ rejected（拒绝）
 """
 
-from typing import Callable
+from typing import Callable, Iterator
 
 import app.store.db as db
 from app.tools.builtin import build_registry
-from app.agent.loop import run_agent_turn
+from app.agent.loop import run_agent_turn, run_agent_turn_stream
 from app.agent.context import build_system, extract_memory
 
 _registry = build_registry()
@@ -54,6 +54,46 @@ def reply(buyer: str, buyer_message: str, agent: Callable = run_agent_turn) -> d
         "pending_actions": pending_with_id,
         "calls": result["calls"],
     }
+
+
+def reply_stream(buyer: str, buyer_message: str,
+                 agent: Callable = run_agent_turn_stream) -> Iterator[dict]:
+    """流式版完整一轮：yield 事件（status/delta/done），落库在 done 后。
+    事件格式：
+      {"type":"status","text":...}
+      {"type":"delta","text":...}
+      {"type":"done","suggestion":...,"tool_results":...,"pending_actions":...}
+    """
+    session_id = db.get_or_create_session(buyer)
+    db.add_message(session_id, "user", buyer_message)
+
+    history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in db.get_messages(session_id, limit=20)[:-1]
+    ]
+    system = build_system(db.get_memory(buyer))
+
+    yield {"type": "status", "text": "🔍 识别意图中..."}
+    result = {"suggestion": "", "tool_results": [], "pending_actions": [], "calls": 0}
+    for ev in agent(buyer_message, _registry, history=history, system=system):
+        if ev["type"] == "delta":
+            yield ev
+        elif ev["type"] == "done":
+            result.update(ev)
+            yield {"type": "status", "text": "✅ 完成"}
+
+    # 落库 + 记忆提取（流式结束后）
+    db.add_message(session_id, "assistant", result["suggestion"])
+    extract_memory(buyer, buyer_message, result.get("tools_used"))
+
+    # pending 落库 + 带 id 返回（把 done 帧补充完整）
+    for p in result["pending_actions"]:
+        aid = db.add_action(session_id, p["tool"], p["args"], "pending")
+        p["id"] = aid
+    yield {"type": "done", "suggestion": result["suggestion"],
+           "tool_results": result["tool_results"],
+           "pending_actions": result["pending_actions"],
+           "calls": result["calls"], "session_id": session_id}
 
 
 def confirm(action_id: int, approve: bool) -> dict:
