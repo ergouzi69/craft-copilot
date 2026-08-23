@@ -146,8 +146,10 @@ function typeDelta(text) {
 }
 
 function typeNext() {
-  // 诊断：看到 tick + 剩余队列长度（每 10 tick 打一次，不刷屏）
-  if (++tickCount % 10 === 0) console.log('[type] tick', typeQueue.length, '剩余');
+  // 诊断：前 3 次 tick 必打（确认 typeNext 有没有启动）；之后每 10 次
+  if (tickCount < 3) console.log('[type] tick#' + tickCount, 'queue=', typeQueue.length);
+  else if (tickCount % 10 === 0) console.log('[type] tick#' + tickCount, 'queue=', typeQueue.length);
+  tickCount++;
   // 防护：done 帧已清空 typingEl / queue 空 → 停止
   if (!typingEl || typeQueue.length === 0) { typeTimer = null; return; }
   try {
@@ -157,6 +159,7 @@ function typeNext() {
     typeQueue = typeQueue.slice(1);
     scrollBottom();
   } catch (e) {
+    console.error('[type] ERROR:', e);   // 不再静默吞错——打出来
     typeTimer = null;
     return;
   }
