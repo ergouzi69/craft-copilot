@@ -55,6 +55,9 @@
 </div>
 
 <script>
+// 版本标记：强刷后看 Console 第一行——是这行就说明加载的是流式版 JS
+console.log('craft-copilot 前端 v6c（流式打字机版 — 拆字渲染+null 防护）');
+
 // ===== 状态 =====
 let ws = null;
 let reqId = 0;
@@ -116,7 +119,7 @@ function showStatus(text) {
   scrollBottom();
 }
 
-// 打字机：delta 入队，40ms/字渲染（createElement 气泡，绝不 innerHTML+=）
+// 打字机：delta 拆字入队，40ms/字渲染（createElement 气泡，绝不 innerHTML+=）
 function typeDelta(text) {
   if (!typingEl) {
     typingEl = document.createElement('div');
@@ -130,16 +133,26 @@ function typeDelta(text) {
     typingEl.appendChild(body);
     document.getElementById('messages').appendChild(typingEl);
   }
-  typeQueue += text;
+  // 拆字：每个字符入队（即使后端发整段 chunk，也保证逐字渲染可见）
+  for (const ch of text) {
+    typeQueue += ch;
+  }
   if (!typeTimer) typeTimer = setTimeout(typeNext, 40);
 }
 
 function typeNext() {
-  if (typeQueue.length === 0) { typeTimer = null; return; }
-  const body = typingEl.querySelector('.type-body');
-  body.textContent += typeQueue[0];
-  typeQueue = typeQueue.slice(1);
-  scrollBottom();
+  // 防护：done 帧已清空 typingEl / queue 空 → 停止
+  if (!typingEl || typeQueue.length === 0) { typeTimer = null; return; }
+  try {
+    const body = typingEl.querySelector('.type-body');
+    if (!body) { typeTimer = null; return; }
+    body.textContent += typeQueue[0];
+    typeQueue = typeQueue.slice(1);
+    scrollBottom();
+  } catch (e) {
+    typeTimer = null;
+    return;
+  }
   typeTimer = setTimeout(typeNext, 40);
 }
 
