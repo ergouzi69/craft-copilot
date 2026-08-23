@@ -5,11 +5,31 @@
 - 前缀路由：T/J/S 自动识别平台，未知来源可提示
 - 参数校验：缺必填参数返回错误，不炸
 - risky 标记：refund_order 是 risky（权限关卡靠这个）
+- Source 从 orders 表查单（v3 数据源）
 """
+
+import pytest
 
 from app.tools.registry import ToolRegistry, ToolDefinition
 from app.tools.sources import SourceRouter, DEFAULT_SOURCES
 from app.tools.builtin import build_registry
+import app.store.db as db
+
+
+@pytest.fixture(autouse=True)
+def clean_db_with_orders(tmp_path, monkeypatch):
+    """临时库 + seed 三平台各一单（Source 查库依赖）"""
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.seed_orders([
+        {"order_id": "T1001", "source": "taobao", "product": "无线鼠标", "amount": 89.0,
+         "status": "in_transit", "carrier": "顺丰速运", "tracking_no": "SF123", "eta": "明天 18:00 前"},
+        {"order_id": "J2001", "source": "jd", "product": "显示器支架", "amount": 150.0,
+         "status": "in_transit", "carrier": "京东物流", "tracking_no": "JD001", "eta": "今天 20:00 前"},
+        {"order_id": "S3001", "source": "shopify", "product": "机械键盘", "amount": 499.0,
+         "status": "shipped", "carrier": "UPS", "tracking_no": "UP001", "eta": "3 天内送达"},
+    ])
+    yield
 
 
 def test_registry_register_and_get():

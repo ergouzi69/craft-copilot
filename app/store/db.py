@@ -21,7 +21,7 @@ from pathlib import Path
 # db.py 位于 app/store/ 下，项目根 = 上三级（app/store → app → craft-copilot）
 DB_PATH = Path(os.environ.get("DB_PATH", str(Path(__file__).resolve().parent.parent.parent / "craft.db")))
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATIONS: dict[int, str] = {
     1: """
@@ -65,6 +65,25 @@ MIGRATIONS: dict[int, str] = {
         value TEXT NOT NULL,
         updated_at REAL NOT NULL,
         UNIQUE(buyer, key)
+    );
+    """,
+    # v3：真实感数据（订单表 + 买家画像表）——解决"数据哪来的"面试短板
+    3: """
+    CREATE TABLE IF NOT EXISTS orders (
+        order_id TEXT PRIMARY KEY,    -- T1001 / J2001 / S3001
+        source TEXT NOT NULL,         -- taobao / jd / shopify
+        product TEXT NOT NULL,        -- 商品名
+        amount REAL NOT NULL,         -- 金额（元）
+        status TEXT NOT NULL,         -- pending / shipped / in_transit / delivered
+        carrier TEXT DEFAULT '',      -- 物流公司
+        tracking_no TEXT DEFAULT '',  -- 运单号
+        eta TEXT DEFAULT ''           -- 预计送达
+    );
+    CREATE TABLE IF NOT EXISTS buyer_profiles (
+        buyer TEXT PRIMARY KEY,
+        personality TEXT,             -- 人格标签（暴躁/理性/老年/学生...）
+        profile TEXT,                 -- 画像描述
+        seed_history TEXT             -- 历史会话摘要（记忆演示用）
     );
     """,
 }
@@ -207,6 +226,72 @@ def get_memory(buyer: str) -> dict[str, str]:
     rows = conn.execute("SELECT key, value FROM memory WHERE buyer=?", (buyer,)).fetchall()
     conn.close()
     return {r["key"]: r["value"] for r in rows}
+
+
+# ========== orders（订单数据：Source 查询的真实感数据源） ==========
+
+def get_order(order_id: str) -> dict | None:
+    """按订单号查订单（Source 查询用；找不到返回 None）"""
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def seed_orders(orders: list[dict]) -> int:
+    """批量插入订单（generate_data.py 用）；已存在跳过。返回插入数"""
+    conn = get_conn()
+    n = 0
+    for o in orders:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO orders (order_id, source, product, amount, status, carrier, tracking_no, eta) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (o["order_id"], o["source"], o["product"], o["amount"], o["status"],
+             o.get("carrier", ""), o.get("tracking_no", ""), o.get("eta", "")),
+        )
+        n += cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
+def count_orders() -> int:
+    conn = get_conn()
+    n = conn.execute("SELECT COUNT(*) AS n FROM orders").fetchone()["n"]
+    conn.close()
+    return n
+
+
+def list_order_ids(source: str | None = None) -> list[str]:
+    """订单号列表（画像修正用：把 LLM 编的订单号替换为库内真实订单）"""
+    conn = get_conn()
+    if source:
+        rows = conn.execute("SELECT order_id FROM orders WHERE source=?", (source,)).fetchall()
+    else:
+        rows = conn.execute("SELECT order_id FROM orders").fetchall()
+    conn.close()
+    return [r["order_id"] for r in rows]
+
+
+# ========== buyer_profiles（买家人格画像：记忆演示用） ==========
+
+def upsert_profile(buyer: str, personality: str, profile: str, seed_history: str = "") -> None:
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO buyer_profiles (buyer, personality, profile, seed_history) VALUES (?,?,?,?) "
+        "ON CONFLICT(buyer) DO UPDATE SET personality=excluded.personality, "
+        "profile=excluded.profile, seed_history=excluded.seed_history",
+        (buyer, personality, profile, seed_history),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_profiles() -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute("SELECT buyer, personality, profile FROM buyer_profiles ORDER BY buyer").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ========== usage（可观测埋点） ==========

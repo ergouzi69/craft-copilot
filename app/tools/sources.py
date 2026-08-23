@@ -8,62 +8,73 @@
 - 订单号前缀路由：T→taobao, J→jd, S→shopify —— 系统自动识别平台（可发现性）
 - 加新平台 = 注册一个 Source，业务代码不动（变更隔离）
 
-这是"外部能力统一接入"的落地：Agent 层不认识任何平台，只认 BaseSource。
+数据来源（v3 升级）：从 orders 表查真实感数据（generate_data.py 生成 100+ 单），
+不再写死——面试官随便报订单号都能查到，且换真实订单 API 只改 Source 内部实现。
+
+"查不到就诚实说"（30 题防编造）：未找到订单返回明确文案，不让模型编。
 """
 
 from typing import Optional
 
+import app.store.db as db
+
+# 状态 → 中文
+STATUS_TEXT = {
+    "pending": "待付款",
+    "shipped": "已发货",
+    "in_transit": "配送中",
+    "delivered": "已签收",
+}
+
+
+def _fmt_order(order: dict, platform_cn: str) -> str:
+    status = STATUS_TEXT.get(order["status"], order["status"])
+    carrier = order.get("carrier", "") or ""
+    tracking = order.get("tracking_no", "") or ""
+    eta = order.get("eta", "") or ""
+    parts = f"[{platform_cn}] 订单 {order['order_id']}（{order['product']}）{status}"
+    if carrier:
+        parts += f"，{carrier} {tracking}"
+    if eta:
+        parts += f"，预计 {eta}"
+    if order["status"] == "pending":
+        parts += f"，金额 ¥{order['amount']:.2f}（待付款）"
+    return parts
+
 
 class BaseSource:
-    """数据源基类：平台差异统一在这里（接口固定，内部可换真实 API）"""
+    """数据源基类：平台差异统一在这里（接口固定，数据来自 orders 表/真实 API）"""
 
     name = "base"
     prefix = "?"
+    platform_cn = "未知"
 
     def query(self, order_id: str) -> str:
-        raise NotImplementedError
+        row = db.get_order(order_id)
+        if not row:
+            return f"[{self.platform_cn}] 未找到订单 {order_id}"
+        return _fmt_order(row, self.platform_cn)
 
     def refund(self, order_id: str, amount: str) -> str:
-        raise NotImplementedError
+        return f"[{self.platform_cn}] 订单 {order_id} 退款 ¥{amount} 已提交（模拟）"
 
 
 class TaobaoSource(BaseSource):
     name = "taobao"
     prefix = "T"
-
-    def query(self, order_id: str) -> str:
-        if order_id == "T1001":
-            return "[淘宝] 订单 T1001（无线鼠标）已发货，顺丰 SF1234567890，预计明天 18:00 前送达"
-        return f"[淘宝] 未找到订单 {order_id}"
-
-    def refund(self, order_id: str, amount: str) -> str:
-        return f"[淘宝] 订单 {order_id} 退款 ¥{amount} 已提交（模拟）"
+    platform_cn = "淘宝"
 
 
 class JDSource(BaseSource):
     name = "jd"
     prefix = "J"
-
-    def query(self, order_id: str) -> str:
-        if order_id == "J2001":
-            return "[京东] 订单 J2001（显示器支架）配送中，京东物流 JD8899001，预计今天 20:00 前送达"
-        return f"[京东] 未找到订单 {order_id}"
-
-    def refund(self, order_id: str, amount: str) -> str:
-        return f"[京东] 订单 {order_id} 退款 ¥{amount} 已提交（模拟）"
+    platform_cn = "京东"
 
 
 class ShopifySource(BaseSource):
     name = "shopify"
     prefix = "S"
-
-    def query(self, order_id: str) -> str:
-        if order_id == "S3001":
-            return "[Shopify] 订单 S3001（机械键盘）已发货，UPS 1Z999AA1，预计 3 天内送达"
-        return f"[Shopify] 未找到订单 {order_id}"
-
-    def refund(self, order_id: str, amount: str) -> str:
-        return f"[Shopify] 订单 {order_id} 退款 ¥{amount} 已提交（模拟）"
+    platform_cn = "Shopify"
 
 
 class SourceRouter:

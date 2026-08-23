@@ -21,22 +21,25 @@ def clean_db(tmp_path, monkeypatch):
     yield
 
 
-def test_schema_migration_v1_to_v2():
-    """模拟 v1 老库（无 memory 表）→ init_db 升到 v2（迁移机制实战）"""
+def test_schema_migration_v1_to_v3():
+    """模拟 v1 老库（无 memory/orders 表）→ init_db 升到最新（迁移机制实战）"""
     conn = db.get_conn()
     conn.executescript("DROP TABLE IF EXISTS memory")     # 模拟老库缺 memory 表
     conn.execute("PRAGMA user_version = 1")              # 标记为 v1
     conn.commit()
     conn.close()
 
-    db.init_db()                                          # 迁移 → v2
+    db.init_db()                                          # 迁移 → v3
     conn = db.get_conn()
     v = conn.execute("PRAGMA user_version").fetchone()[0]
     has_memory = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='memory'").fetchone()
+    has_orders = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='orders'").fetchone()
     conn.close()
-    assert v == 2
+    assert v == 3                                         # 升到 v3
     assert has_memory is not None
+    assert has_orders is not None                         # v3 迁移也生效
 
 
 def test_build_system_no_memory():
