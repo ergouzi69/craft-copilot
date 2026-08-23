@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>craft-copilot · 客服工作台</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: system-ui, "Microsoft YaHei", sans-serif; height:100vh; display:flex; background:#f5f6fa; color:#2c3e50; }
+  #sidebar { width:240px; background:#2c3e50; color:#fff; display:flex; flex-direction:column; }
+  #sidebar h2 { padding:16px; font-size:16px; border-bottom:1px solid #34495e; }
+  #session-list { flex:1; overflow-y:auto; padding:8px; }
+  .session-item { padding:10px 12px; border-radius:6px; cursor:pointer; margin-bottom:4px; font-size:13px; }
+  .session-item:hover { background:#34495e; }
+  .session-item.active { background:#3498db; }
+  #new-buyer { padding:10px; border-top:1px solid #34495e; display:flex; gap:6px; }
+  #new-buyer input { flex:1; padding:8px; border:none; border-radius:4px; font-size:13px; }
+  #new-buyer button { padding:8px 10px; background:#3498db; border:none; color:#fff; border-radius:4px; cursor:pointer; }
+  #main { flex:1; display:flex; flex-direction:column; }
+  #header { padding:14px 20px; background:#fff; border-bottom:1px solid #e0e4ea; font-weight:600; }
+  #messages { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:70%; padding:10px 14px; border-radius:10px; font-size:14px; line-height:1.6; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; background:#3498db; color:#fff; }
+  .msg.assistant { align-self:flex-start; background:#fff; border:1px solid #e0e4ea; }
+  .msg .tag { font-weight:700; margin-bottom:4px; display:block; font-size:12px; color:#7f8c8d; }
+  .action-card { align-self:flex-start; background:#fff8e1; border:1px solid #ffd54f; border-radius:10px; padding:12px; max-width:70%; }
+  .action-card .title { font-weight:600; color:#e67e22; font-size:13px; margin-bottom:6px; }
+  .action-card button { padding:6px 12px; border:none; border-radius:4px; cursor:pointer; font-size:12px; margin-right:6px; }
+  .btn-ok { background:#27ae60; color:#fff; }
+  .btn-no { background:#e74c3c; color:#fff; }
+  #composer { padding:14px 20px; background:#fff; border-top:1px solid #e0e4ea; display:flex; gap:10px; }
+  #composer input { flex:1; padding:10px 14px; border:1px solid #e0e4ea; border-radius:20px; font-size:14px; outline:none; }
+  #composer button { padding:10px 22px; background:#3498db; border:none; color:#fff; border-radius:20px; cursor:pointer; font-size:14px; }
+  .typing { color:#95a5a6; font-size:13px; }
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <h2>🛍️ craft-copilot</h2>
+  <div id="session-list"></div>
+  <div id="new-buyer">
+    <input id="buyer-name" placeholder="买家名（如 张三）">
+    <button onclick="newSession()">+</button>
+  </div>
+</div>
+
+<div id="main">
+  <div id="header">客服工作台</div>
+  <div id="messages"></div>
+  <div id="composer">
+    <input id="msg" placeholder="输入买家消息，如：我的订单 T1001 发货了吗？" onkeydown="if(event.key==='Enter')send()">
+    <button onclick="send()">发送</button>
+  </div>
+</div>
+
+<script>
+// ===== 状态 =====
+let ws = null;
+let reqId = 0;
+let currentBuyer = null;   // 当前选中的买家（发消息用）
+let pending = new Map();   // pending_id → 卡片元素（确认后移除）
+
+// ===== WS 连接（RPC 信封） =====
+function connect() {
+  ws = new WebSocket('ws://' + location.host + '/ws/copilot');
+  ws.onmessage = (ev) => handleRpc(JSON.parse(ev.data));
+  ws.onclose = () => { setTimeout(connect, 2000); };   // 断线重连
+}
+
+// 发请求信封：{type, req_id, payload}
+function sendRpc(type, payload) {
+  if (!ws || ws.readyState !== 1) { alert('连接未就绪'); return; }
+  ws.send(JSON.stringify({type, req_id: String(++reqId), payload}));
+}
+
+// 收响应：按 type 分发
+function handleRpc(d) {
+  if (d.type === 'session.list.result') renderSessions(d.payload.sessions);
+  else if (d.type === 'chat.reply.result') renderReply(d.payload);
+  else if (d.type === 'action.confirm.result') handleConfirmResult(d.payload);
+  else if (d.type === 'error') addSystem('❌ ' + (d.payload && d.payload.message));
+}
+
+// ===== 会话列表 =====
+function loadSessions() { sendRpc('session.list', {}); }
+
+function renderSessions(list) {
+  const el = document.getElementById('session-list');
+  el.innerHTML = '';
+  list.forEach(s => {
+    const item = document.createElement('div');
+    item.className = 'session-item' + (s.buyer === currentBuyer ? ' active' : '');
+    item.textContent = s.buyer + '（' + s.msg_count + '）';
+    item.onclick = () => selectSession(s);
+    el.appendChild(item);
+  });
+}
+
+function newSession() {
+  const name = document.getElementById('buyer-name').value.trim();
+  if (!name) return;
+  document.getElementById('buyer-name').value = '';
+  currentBuyer = name;
+  // 新建会话 = 用该 buyer 发一条"你好"（服务端 get_or_create）
+  sendRpc('chat.reply', {buyer: name, buyer_message: '你好'});
+}
+
+function selectSession(s) {
+  currentBuyer = s.buyer;
+  loadSessions();   // 刷新高亮（简化版：会话历史拉取放 Phase 6/7）
+}
+
+// ===== 消息区 =====
+function addMessage(role, text) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  if (role === 'assistant') {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = '🤖 Copilot';
+    el.appendChild(tag);
+  }
+  const p = document.createElement('div');
+  p.textContent = text;
+  el.appendChild(p);
+  document.getElementById('messages').appendChild(el);
+  scrollBottom();
+}
+
+function addSystem(text) {
+  const el = document.createElement('div');
+  el.className = 'typing';
+  el.textContent = text;
+  document.getElementById('messages').appendChild(el);
+  scrollBottom();
+}
+
+function scrollBottom() {
+  const m = document.getElementById('messages');
+  m.scrollTop = m.scrollHeight;
+}
+
+// ===== 发送买家消息 =====
+function send() {
+  const text = document.getElementById('msg').value.trim();
+  if (!text) return;
+  if (!currentBuyer) { alert('先选择买家（点左侧会话或新建）'); return; }
+  document.getElementById('msg').value = '';
+  addMessage('user', text);
+  addSystem('🔍 识别意图中...');
+  sendRpc('chat.reply', {buyer: currentBuyer, buyer_message: text});
+}
+
+// ===== 渲染回复（含 pending 卡片） =====
+function renderReply(payload) {
+  // 去掉"识别意图中"
+  const last = document.querySelector('.typing');
+  if (last) last.remove();
+  addMessage('assistant', payload.suggestion);
+  // pending 操作 → 卡片
+  payload.pending_actions.forEach(p => {
+    const card = document.createElement('div');
+    card.className = 'action-card';
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = '⏳ 待确认：' + p.tool + '（' + JSON.stringify(p.args) + '）';
+    card.appendChild(title);
+    const ok = document.createElement('button');
+    ok.className = 'btn-ok';
+    ok.textContent = '✅ 确认执行';
+    ok.onclick = () => confirmAction(p.id, true);
+    const no = document.createElement('button');
+    no.className = 'btn-no';
+    no.textContent = '❌ 拒绝';
+    no.onclick = () => confirmAction(p.id, false);
+    card.appendChild(ok); card.appendChild(no);
+    document.getElementById('messages').appendChild(card);
+    pending.set(p.id, card);
+    scrollBottom();
+  });
+}
+
+function confirmAction(id, approve) {
+  sendRpc('action.confirm', {action_id: id, approve});
+}
+
+function handleConfirmResult(payload) {
+  addSystem(payload.ok ? '✅ ' + payload.result : 'ℹ️ ' + payload.result);
+}
+
+// ===== 启动 =====
+connect();
+loadSessions();
+</script>
+</body>
+</html>
