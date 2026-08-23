@@ -1,0 +1,7 @@
+# 锁版本：保证可复现（.venv\Scripts\python.exe -m pip freeze 生成）
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.4
+websockets==17.0.1
+pytest==9.1.1
+httpx==0.28.1
