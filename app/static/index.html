@@ -165,10 +165,6 @@ function typeDelta(text) {
 }
 
 function typeNext() {
-  // 诊断：前 3 次 tick 必打（确认 typeNext 有没有启动）；之后每 10 次
-  if (tickCount < 3) console.log('[type] tick#' + tickCount, 'queue=', typeQueue.length);
-  else if (tickCount % 10 === 0) console.log('[type] tick#' + tickCount, 'queue=', typeQueue.length);
-  tickCount++;
   // 队列空：若 done 已到则收尾，否则等新 delta
   if (!typingEl || typeQueue.length === 0) {
     typeTimer = null;
