@@ -3,7 +3,7 @@
 面向电商客服场景的单用户 Agent 助手：买家消息进来，手写执行循环处理（查单/退款建议），高风险操作必须客服确认执行，全程会话/记忆/调用可观测可审计。
 
 > 从 customer-copilot（概念验证版）重构而来：对齐五层架构 + 上下文工程 + 流式打字机 + 可观测评测。
-> 多用户升级版见 [enterprise-workbench](../enterprise-workbench)。
+> 多用户升级版见 [enterprise-workbench](https://github.com/ergouzi69/enterprise-workbench)。
 
 ## 特性
 
